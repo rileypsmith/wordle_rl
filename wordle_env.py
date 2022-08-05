@@ -16,6 +16,7 @@ from gym import Env
 from gym.spaces import Box, Discrete
 
 import agents
+from count_remaining_words import count_possible_words
 
 # Read words from file
 with open('words.txt', 'r') as fp:
@@ -34,79 +35,14 @@ def plot_tile(letter, color=0):
 
 COLORS = [(128, 128, 128), (252, 219, 3), (0, 186, 68)]
 
-def leave_one_out(word_in, idx):
-    word = word_in.copy()
-    return word[idx], np.delete(word, idx)
-
-def count_possible_words(state):
-    if state.sum() == 0:
-        return len(WORDS)
-    # Mask out zeros in state
-    state = state[np.where(state > 0)]
-    # Separate state into letter guesses and tile colors
-    tile_colors, guessed_letters = np.divmod(state - 1, 26)
-    conditions = defaultdict()
-    for row_idx in state.shape[0]:
-        row_colors = tile_colors[row_idx]
-        row_letters = guessed_letters[row_idx]
-        for i in range(len(row_letters)):
-            letter, remaining_letters = leave_one_out(row_letters, i)
-            color, remaining_colors = leave_one_out(row_colors, i)
-            if color == 2:
-                # Tile is green, so store the index at which this letter is found
-                conditions[string.ascii_lowercase[letter]] = i
-            elif color == 1:
-
 
 
 
 def get_reward(previous_state, new_state):
-
-
-    if state.sum() == 0:
-        reward = 0
-        for i, (guessed, correct) in enumerate(zip(guess, answer)):
-            if guessed == correct:
-                reward += 3
-            elif guessed in answer:
-                reward += 2
-            else:
-                reward += 1
-
-    # Start counting rewards
-    reward = 0
-    for i, letter in enumerate(guess):
-        idx = string.ascii_lowercase.index(letter)
-
-        if idx in guessed_letters[:,i]:
-            guessed_pos = (guessed_letters[:,i] == idx).argmax()
-            if tile_colors[guessed_pos,i] == 2:
-                reward += 2
-                continue
-            else:
-                reward -= 1
-                continue
-
-        elif idx in guessed_letters:
-            guessed_positions = np.where(guessed_letters == idx)
-            if np.any(tile_colors[guessed_positions] == 0):
-                reward -= 1
-            else:
-                # Is the tile green or yellow?
-                if answer[i] == letter:
-                    reward += 3
-                else:
-                    reward += 1
-
-        else:
-            if answer[i] == letter:
-                reward += 3
-            elif letter in answer:
-                reward += 2
-            else:
-                reward += 1
-
-    return reward
+    # Count remaining words in previous state and new state
+    prev_remaining_words = count_possible_words(previous_state)
+    current_remaining_words = count_possible_words(new_state)
+    return (prev_remaining_words - current_remaining_words) / prev_remaining_words
 
 class WordleEnv(Env):
     def __init__(self, num_guesses=6, **kwargs):
@@ -165,13 +101,11 @@ class WordleEnv(Env):
         # Get state for each letter and calculate reward (2 points for green, 1 for yellow, 0 for gray)
         tile_states = []
         new_state = []
-        reward = 0
         letters_guessed = defaultdict(int)
 
         for guessed_letter, true_letter in zip(guess, self.answer):
             if guessed_letter == true_letter:
                 tile_state = 2
-                reward += 2
                 letters_guessed[guessed_letter] += 1
                 letter_position = string.ascii_lowercase.index(guessed_letter) + 1
                 local_state = 52 + letter_position
@@ -188,7 +122,6 @@ class WordleEnv(Env):
             num_occurrences = self.answer.count(guessed_letter)
             if letters_guessed[guessed_letter] <= num_occurrences:
                 tile_state = 1
-                reward += 1
             else:
                 tile_state = 0
             # Now account for which letter of the alphabet it is
@@ -199,31 +132,12 @@ class WordleEnv(Env):
             # Also store the tile_state
             tile_states[i] = tile_state
 
-
-        # for guessed_letter, true_letter in zip(guess, self.answer):
-        #     letters_guessed[guessed_letter] += 1
-        #     # First figure out if it is gray, yellow, or green
-        #     if guessed_letter == true_letter:
-        #         tile_state = 2
-        #         reward += 2
-        #     elif guessed_letter in self.answer:
-        #         num_occurrences = self.answer.count(guessed_letter)
-        #         if letters_guessed[guessed_letter] <= num_occurrences:
-        #             tile_state = 1
-        #             reward += 1
-        #         else:
-        #             tile_state = 0
-        #     else:
-        #         tile_state = 0
-        #     # Now account for which letter of the alphabet it is
-        #     letter_position = string.ascii_lowercase.index(guessed_letter) + 1
-        #     # Compute state. First 26 are gray, next 26 yellow, last 26 green
-        #     new_state.append(tile_state * 26 + letter_position)
-        #     # Also store the tile_state
-        #     tile_states.append(tile_state)
-
         # Set state for this guess
+        old_state = self.state.copy()
         self.state[self.guesses] = np.array(new_state, dtype=np.uint8)
+
+        # Compute reward
+        reward = get_reward(old_state, self.state)
 
         # Update canvas for rendering purposes
         self.draw_on_canvas(tile_states, guess)

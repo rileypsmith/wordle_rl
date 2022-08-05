@@ -1,4 +1,16 @@
-from collections import defaultdict
+"""
+Script which contains the function that parses all the conditions from the game
+state and uses the conditions to reduce the set of possible words.
+
+@author: Riley Smith
+Created: 8-4-2022
+"""
+
+import numpy as np
+
+# Read words from file
+with open('words.txt', 'r') as fp:
+    WORDS = [l.strip() for l in fp.readlines()]
 
 def leave_one_out(word_in, idx):
     word = word_in.copy()
@@ -57,3 +69,5 @@ def count_possible_words(state):
             if word.count(letter) > occurences:
                 return False
         return True
+
+    return [word for word in WORDS if is_valid(word)]
