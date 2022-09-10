@@ -1,181 +1,89 @@
 """
-Play the game of Wordle a bunch and store a replay buffer.
+Class for a replay buffer that can store information.
 
 @author: Riley Smith
-Created: 8-2-2022
+Created: 9-10-2022
 """
-import copy
-import csv
-from pathlib import Path
-import time
 
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 
-from wordle_env import WordleEnv
-from nn_agents import LSTMAgent
-import utils
+class ReplayBuffer():
+    def __init__(self, random_seed=1234):
+        # Blank list to populate with experience as it is collected
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.dones = []
+        self.new_states = []
 
-NUM_WORDS = 216
+        # Seed random number generator for reproducibility
+        self.rng = np.random.default_rng(random_seed)
 
-def make_logfile(logfile):
-    with open(logfile, 'w+', newline='') as csvfile:
-        writer = csv.writer(csvfile, skipinitialspace=True)
-        writer.writerow(['Epoch', 'Loss', 'Time'])
+    def store_experience(self, state, action, reward, done, new_state):
+        self.states.append(state)
+        self.actions.append(action)
+        self.rewards.append(reward)
+        self.dones.append(done)
+        self.new_states.append(new_state)
 
-def update_logfile(logfile, epoch, loss, time):
-    with open(logfile, 'a+', newline='') as csvfile:
-        writer = csv.writer(csvfile, skipinitialspace=True)
-        writer.writerow([epoch, loss, time])
+    def to_numpy(self):
+        self.states = np.stack(self.states, axis=0)
+        self.actions = np.array(self.actions)
+        self.rewards = np.array(self.rewards)
+        self.dones = np.array(self.dones)
+        self.new_states = np.stack(self.new_states, axis=0)
 
-def train(out_dir, epochs=50):
-    # Setup output directory
-    out_dir = utils.setup_output_directory(out_dir)
+    def sample(self, idx=None):
+        return self.states[idx]
 
-    # Make subdirectory for saving weights
-    weight_dir = Path(out_dir, 'weights')
-    weight_dir.mkdir()
+    def batch(self, batch_size, shuffle=True):
+        # Make sure self.experience is an ndarray
+        if not isinstance(self.states, np.ndarray):
+            self.to_numpy()
+        indices = np.arange(self.states.shape[0])
+        if shuffle:
+            # Randomize order of indices for batching
+            self.rng.shuffle(indices)
+        # Iterate over experience in batches
+        for i in range(0, indices.size, batch_size):
+            batch_indices = indices[i: i + batch_size]
+            states = self.states[batch_indices]
+            actions = self.actions[batch_indices]
+            rewards = self.rewards[batch_indices]
+            dones = self.dones[batch_indices]
+            new_states = self.new_states[batch_indices]
+            yield states, actions, rewards, dones, new_states
 
-    # Also start a CSV logfile
-    logfile = str(Path(out_dir, 'training_log.csv'))
-    make_logfile(logfile)
+    def num_batches(self, batch_size):
+        return int(np.ceil(len(self.states) / batch_size))
 
-    # Build target and agent network
-    t_net = LSTMAgent()
-    q_net = LSTMAgent()
+    def play_game(self, env, agent):
+        """
+        Use the given agent to play one game on the given env and store the
+        result in the replay buffer.
+        """
+        done = False
+        steps = []
+        while not done:
+            state = env.state
+            action = agent.act(tf.convert_to_tensor(np.expand_dims(state, axis=0), dtype=tf.float32))
+            new_state, reward, done, _ = env.step(action)
+            self.store_experience(state, action, reward, done, new_state)
 
-    # Training constants
-    gamma = 0.5
-    opt = tf.keras.optimizers.Adam()
+    def populate(self, env, agent, steps=1000):
+        """Build, fill, and return an initial replay buffer"""
+        # Populate it with steps
+        print('Populating replay buffers')
+        for _ in tqdm(range(steps)):
+            self.play_game(env, agent)
+            env.reset()
+        self.to_numpy()
 
-    best_loss = None
-    start = time.time()
-    for epoch in range(epochs):
-        print(f'EPOCH {epoch+1}/{epochs}')
-        avg_loss = do_epoch(q_net, t_net, gamma, opt)
-
-        # Save weights of best network
-        if (best_loss is None) or (avg_loss < best_loss):
-            # Save weights of network
-            q_net.save_weights(str(Path(weight_dir, 'checkpoint')))
-            best_loss = avg_loss
-
-        # Print progres to CSV file
-        elapsed = round((time.time() - start) / 60, 2)
-        update_logfile(logfile, epoch + 1, avg_loss, elapsed)
-
-def do_epoch(q_net, t_net, gamma, opt, num_steps=200):
-
-    # # Initialize environment
-    # env = WordleEnv()
-
-    pbar = tqdm(range(num_steps))
-    total_rewards = 0
-    num_batches = 0
-    batch_size = 10
-    epsilon = 0.2
-    for i in pbar:
-        guesses_made = 0
-        states = []
-        envs = [WordleEnv() for _ in range(batch_size)]
-        for j in range(batch_size):
-            # Get to random starting state
-            local_env = envs[j]
-            for _ in range(guesses_made % 5):
-                local_env.step(local_env.action_space.sample())
-            guesses_made += 1
-
-            # Populate replay buffer
-            states.append(local_env.state)
-
-        # Prepare states for Q network to choose an action
-        state_batch = tf.convert_to_tensor(np.stack(states, axis=0))
-
-        # Start tracking gradient here
-        with tf.GradientTape() as tape:
-            # Get network's chosen action
-            q_pred = q_net(state_batch)
-            chosen_actions = tf.argmax(q_pred, axis=-1)
-
-            # Implement epsilon-greedy randomness
-            # random_actions = tf.cast(tf.random.uniform((batch_size,), minval=0, maxval=NUM_WORDS, dtype=tf.int64), tf.float32)
-            random_actions = tf.random.uniform((batch_size,), minval=0, maxval=NUM_WORDS, dtype=tf.int64)
-            actions = tf.where(tf.random.uniform((batch_size,)) < epsilon, random_actions, chosen_actions)
-
-            q_acted = tf.math.reduce_sum(q_pred * tf.one_hot(actions, NUM_WORDS))
-            # q_acted = tf.math.reduce_max(q_pred, axis=-1)
-
-            # Get the real rewards, next states, and whether or not the game is over
-            rewards = []
-            done = []
-            next_states = []
-            for j, action in enumerate(actions):
-                local_env = envs[j]
-                next_state, reward, local_done, _ = local_env.step(action)
-                rewards.append(reward)
-                done.append(local_done)
-                next_states.append(next_state)
-            rewards = tf.constant(rewards, dtype=tf.float32)
-            done = tf.constant(done, dtype=tf.float32)
-
-            # Estimate the future value of each action using the target network
-            next_state_batch = tf.convert_to_tensor(np.stack(next_states, axis=0))
-            t_pred = t_net(next_state_batch)
-            future_rewards = tf.math.reduce_max(t_pred, axis=-1)
-
-            # Finally compute "true" rewards
-            true_rewards = rewards + ((1 - done) * gamma * future_rewards)
-            if i == 150:
-                breakpoint()
-
-            # Loss is just MSE between q_net's predicted value and "true" value
-            loss = tf.math.reduce_mean(tf.math.square(q_acted - tf.stop_gradient(true_rewards)))
-
-            # Update weights of Q network
-            grad = tape.gradient(loss, q_net.trainable_weights)
-            opt.apply_gradients(zip(grad, q_net.trainable_weights))
-
-        # # Figure out the "true" values of each action at this state
-        # values = []
-        # for i in range(env.action_space.n):
-        #     local_env = copy.deepcopy(env)
-        #     state, reward, done, _ = local_env.step(i)
-        #     # if not done:
-        #     # Apply target network to get estimate of future rewards
-        #     future_reward =
-        #     next_action = int(tf.math.argmax(t_net(tf.expand_dims(tf.convert_to_tensor(state), axis=0)), axis=1))
-        #     _, future_reward, _, _ = local_env.step(next_action)
-        #     # breakpoint()
-        #     values.append(reward + (gamma * future_reward))
-        #     # else:
-        #     #     if local_env.correct:
-        #     #         values.append(10)
-        #
-        # # Turn values into a tensor so it can be used to train primary network
-        # values = tf.expand_dims(tf.constant(values, dtype=tf.float32), axis=0)
-        #
-        # # Now train primary network using that as "truth"
-        # with tf.GradientTape() as tape:
-        #     # Predict value of each action at current state
-        #     q_pred = q_net(tf.expand_dims(tf.convert_to_tensor(env.state), axis=0))
-        #     loss = tf.math.reduce_mean(tf.math.square(q_pred - values))
-        #     # Update weights of Q network
-        #     grad = tape.gradient(loss, q_net.trainable_weights)
-        #     opt.apply_gradients(zip(grad, q_net.trainable_weights))
-
-        # Display total rewards for the batch along with progres bar
-        total_rewards += tf.math.reduce_mean(true_rewards)
-        num_batches += 1
-        pbar.set_description(f'Rewards: {total_rewards / num_batches:.2f}')
-
-        # # Reset environment
-        # env.reset()
-
-    # Reset target weights to align with q network
-    t_net.set_weights(q_net.get_weights())
-
-    return float(total_rewards / num_batches)
-
-if __name__ == '__main__':
-    train('output/TEST')
+    def reset(self):
+        self.states = []
+        self.actions = []
+        self.rewards = []
+        self.dones = []
+        self.new_states = []

@@ -16,6 +16,7 @@ from gym import Env
 from gym.spaces import Box, Discrete
 
 import agents
+import utils
 from count_remaining_words import count_possible_words
 
 # Read words from file
@@ -35,33 +36,13 @@ def plot_tile(letter, color=0):
 
 COLORS = [(128, 128, 128), (252, 219, 3), (0, 186, 68)]
 
-
-
-
-def get_reward(previous_state, new_state, done, gamma=0.5):
-    if done:
-        # See if you got the right word or if you ran out of guesses
-        guesses_made = np.count_nonzero(new_state[:,0])
-        if guesses_made < 6:
-            return 1 / (1 - gamma)
-        else:
-            return 0
-
-    # Game is not over yet, so count remaining words in previous state and new state
-    prev_remaining_words = count_possible_words(previous_state)
-    current_remaining_words = count_possible_words(new_state)
-    reward = (prev_remaining_words - current_remaining_words) / prev_remaining_words
-    return reward
-
-# def get_reward(previous_state, new_state, done):
-#     guesses_made = np.count_nonzero(new_state[:,0])
-#     return 6 - guesses_made
+REWARD = 10
 
 class WordleEnv(Env):
-    def __init__(self, num_guesses=6, **kwargs):
+    def __init__(self, num_guesses=6, easy=False, **kwargs):
         super().__init__(**kwargs)
 
-        # Choose any one of the 2309 valid Wordle words
+        # Choose any one of the valid Wordle words
         # self.action_space = Discrete(2309)
         self.action_space = Discrete(len(WORDS))
 
@@ -78,39 +59,19 @@ class WordleEnv(Env):
         self.num_guesses = num_guesses
         self.guesses = 0
 
-        # Set a starting state, all zeros
-        self.state = np.zeros((num_guesses, 5))
+        # For this environment, state is a 130-vector for each guess that one-hot
+        # encodes the guesses made at that step. It starts as just a 130-zero vector
+        self.state = np.zeros((self.num_guesses,130))
 
         # Choose a secret word
+        idx = 0 if easy else None
         self.answer = get_word()
 
         # Set canvas for rendering
         self.canvas = np.ones((28*num_guesses, 28*5, 3), dtype=np.uint8)
 
-    def draw_on_canvas(self, tile_states, guess):
+    def draw_on_canvas(self, guess):
         """Update the canvas to show the latest guess"""
-        rendered_tiles = [plot_tile(letter, color=state) for letter, state in zip(guess, tile_states)]
-        new_row = np.concatenate(rendered_tiles, axis=1)
-        self.canvas[self.guesses * 28: (self.guesses + 1) * 28, :, :] = new_row
-
-    def step(self, action, display=False):
-        """
-        Step function for custom Wordle Env.
-
-        Take the given action (integer from 0 to 2309) and retrieve the word
-        corresponding to that guess. Compute the new state based on that word
-        and the answer.
-
-        Parameters
-        ----------
-        action : int
-            The integer for the index of the word guessed.
-        """
-        # Retrieve word from list
-        guess = get_word(idx=action)
-        # print('guess: ', guess)
-        # print('idx: ', action)
-
         # Get state for each letter and calculate reward (2 points for green, 1 for yellow, 0 for gray)
         tile_states = []
         new_state = []
@@ -145,22 +106,47 @@ class WordleEnv(Env):
             # Also store the tile_state
             tile_states[i] = tile_state
 
-        # Set state for this guess
-        old_state = self.state.copy()
-        self.state[self.guesses] = np.array(new_state, dtype=np.uint8)
+        rendered_tiles = [plot_tile(letter, color=state) for letter, state in zip(guess, tile_states)]
+        new_row = np.concatenate(rendered_tiles, axis=1)
+        self.canvas[(self.guesses - 1) * 28: self.guesses * 28, :, :] = new_row
 
-        # Update canvas for rendering purposes
-        self.draw_on_canvas(tile_states, guess)
+    def step(self, action, display=False):
+        """
+        Step function for custom Wordle Env.
 
+        Take the given action (integer from 0 to 2309) and retrieve the word
+        corresponding to that guess. Compute the new state based on that word
+        and the answer.
+
+        Parameters
+        ----------
+        action : int
+            The integer for the index of the word guessed.
+        """
         # Count this as a new guess
         self.guesses += 1
 
-        # If you have hit the max guesses or have guessed the word exactly, you are done
-        done = (self.guesses >= self.num_guesses) or (guess == self.answer)
-        self.correct = (guess == self.answer)
+        # Retrieve word from list
+        guess = get_word(idx=action)
 
-        # Compute reward
-        reward = get_reward(old_state, self.state, done)
+        # If guessed correctly, give reward, otherwise no reward
+        done = False
+        reward = 0
+        if guess == self.answer:
+            # Make sure this isn't a random first guess
+            reward = 0 if (self.guesses == 1) else REWARD
+            done = True
+        elif self.guesses == self.num_guesses:
+            reward = -1 * REWARD
+            done = True
+
+        # Set state for this guess
+        current_state = np.expand_dims(utils.encode_word(guess), axis=0)
+        self.state[self.guesses - 1] = current_state
+        # self.state = np.concatenate([self.state, current_state], axis=0)
+
+        # Update canvas for rendering purposes
+        self.draw_on_canvas(guess)
 
         # Placeholder for info (not used here, but required by OpenAI Gym)
         info = {'guess': guess}
@@ -176,7 +162,7 @@ class WordleEnv(Env):
         # Reset number of guesses made
         self.guesses = 0
         # Reset state
-        self.state = np.zeros((self.num_guesses, 5))
+        self.state = np.zeros((self.num_guesses, 130))
         # Choose a new word
         self.answer = get_word()
 #
