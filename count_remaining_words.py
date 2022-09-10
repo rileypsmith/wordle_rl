@@ -5,6 +5,7 @@ state and uses the conditions to reduce the set of possible words.
 @author: Riley Smith
 Created: 8-4-2022
 """
+import string
 
 import numpy as np
 
@@ -20,7 +21,12 @@ def count_possible_words(state):
     if state.sum() == 0:
         return len(WORDS)
     # Mask out zeros in state
-    state = state[np.where(state > 0)]
+
+    state = state[np.count_nonzero(state, axis=1) > 0]
+
+    # state = state[np.where(state > 0)]
+    # if state.ndim == 1:
+        # state = np.expand_dims(state, axis=0)
     # Separate state into letter guesses and tile colors
     tile_colors, guessed_letters = np.divmod(state - 1, 26)
 
@@ -34,7 +40,10 @@ def count_possible_words(state):
         row_letters = guessed_letters[row_idx]
 
         for i, (letter_idx, color) in enumerate(zip(row_letters, row_colors)):
+            if i > 4:
+                breakpoint()
             # Get the actual character letter instead of its index
+            letter_idx = int(letter_idx)
             letter = string.ascii_lowercase[letter_idx]
 
             if color == 2:
@@ -60,8 +69,11 @@ def count_possible_words(state):
 
     def is_valid(word):
         for i, letter in correct_positions.items():
-            if not word[i] == letter:
-                return False
+            try:
+                if not word[i] == letter:
+                    return False
+            except:
+                breakpoint()
         for letter, occurences in min_occurences.items():
             if not word.count(letter) >= occurences:
                 return False
@@ -70,4 +82,4 @@ def count_possible_words(state):
                 return False
         return True
 
-    return [word for word in WORDS if is_valid(word)]
+    return len([word for word in WORDS if is_valid(word)])

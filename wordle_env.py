@@ -38,11 +38,24 @@ COLORS = [(128, 128, 128), (252, 219, 3), (0, 186, 68)]
 
 
 
-def get_reward(previous_state, new_state):
-    # Count remaining words in previous state and new state
+def get_reward(previous_state, new_state, done, gamma=0.5):
+    if done:
+        # See if you got the right word or if you ran out of guesses
+        guesses_made = np.count_nonzero(new_state[:,0])
+        if guesses_made < 6:
+            return 1 / (1 - gamma)
+        else:
+            return 0
+
+    # Game is not over yet, so count remaining words in previous state and new state
     prev_remaining_words = count_possible_words(previous_state)
     current_remaining_words = count_possible_words(new_state)
-    return (prev_remaining_words - current_remaining_words) / prev_remaining_words
+    reward = (prev_remaining_words - current_remaining_words) / prev_remaining_words
+    return reward
+
+# def get_reward(previous_state, new_state, done):
+#     guesses_made = np.count_nonzero(new_state[:,0])
+#     return 6 - guesses_made
 
 class WordleEnv(Env):
     def __init__(self, num_guesses=6, **kwargs):
@@ -80,7 +93,7 @@ class WordleEnv(Env):
         new_row = np.concatenate(rendered_tiles, axis=1)
         self.canvas[self.guesses * 28: (self.guesses + 1) * 28, :, :] = new_row
 
-    def step(self, action):
+    def step(self, action, display=False):
         """
         Step function for custom Wordle Env.
 
@@ -95,8 +108,8 @@ class WordleEnv(Env):
         """
         # Retrieve word from list
         guess = get_word(idx=action)
-        print('guess: ', guess)
-        print('idx: ', action)
+        # print('guess: ', guess)
+        # print('idx: ', action)
 
         # Get state for each letter and calculate reward (2 points for green, 1 for yellow, 0 for gray)
         tile_states = []
@@ -136,9 +149,6 @@ class WordleEnv(Env):
         old_state = self.state.copy()
         self.state[self.guesses] = np.array(new_state, dtype=np.uint8)
 
-        # Compute reward
-        reward = get_reward(old_state, self.state)
-
         # Update canvas for rendering purposes
         self.draw_on_canvas(tile_states, guess)
 
@@ -146,7 +156,11 @@ class WordleEnv(Env):
         self.guesses += 1
 
         # If you have hit the max guesses or have guessed the word exactly, you are done
-        done = (self.guesses >= self.num_guesses) or (reward == 10)
+        done = (self.guesses >= self.num_guesses) or (guess == self.answer)
+        self.correct = (guess == self.answer)
+
+        # Compute reward
+        reward = get_reward(old_state, self.state, done)
 
         # Placeholder for info (not used here, but required by OpenAI Gym)
         info = {'guess': guess}
@@ -165,37 +179,39 @@ class WordleEnv(Env):
         self.state = np.zeros((self.num_guesses, 5))
         # Choose a new word
         self.answer = get_word()
-
-env = WordleEnv()
-env.state
-
-test = np.array([[1, 2], [3, 4]])
-np.array([1, 2]) in test
-
-env.step(env.action_space.sample())
-
-
-env.render()
-
-env.state[np.where(env.state > 0)].shape
-
-sub = env.state[np.where(env.state[:,0] > 0)]
-(sub % 26)[:,0]
-
-from importlib import reload
-reload(agents)
-
-def test_env():
-    env = WordleEnv()
-    state = env.state
-    print('Answer is: ', env.answer)
-
-    done = False
-    while not done:
-        action = agents.fixed_score_agent(state, WORDS)
-        # action = env.action_space.sample()
-        state, _, done, info = env.step(action)
-        env.render()
-        print('Guess: ', info['guess'])
-
-test_env()
+#
+# env = WordleEnv()
+# env.state
+# env.action_space.n
+# dir(env.action_space)
+#
+# test = np.array([[1, 2], [3, 4]])
+# np.array([1, 2]) in test
+#
+# env.step(env.action_space.sample())
+#
+#
+# env.render()
+#
+# env.state[np.where(env.state > 0)].shape
+#
+# sub = env.state[np.where(env.state[:,0] > 0)]
+# (sub % 26)[:,0]
+#
+# from importlib import reload
+# reload(agents)
+#
+# def test_env():
+#     env = WordleEnv()
+#     state = env.state
+#     print('Answer is: ', env.answer)
+#
+#     done = False
+#     while not done:
+#         action = agents.fixed_score_agent(state, WORDS)
+#         # action = env.action_space.sample()
+#         state, _, done, info = env.step(action)
+#         env.render()
+#         print('Guess: ', info['guess'])
+#
+# test_env()
